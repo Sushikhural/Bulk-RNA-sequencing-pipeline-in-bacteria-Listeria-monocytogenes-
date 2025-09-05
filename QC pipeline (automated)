@@ -1,0 +1,157 @@
+library(tidyverse)
+library(DESeq2)
+library(ggrepel)
+library(cowplot)
+library(vsn)
+library(ComplexHeatmap)
+library(AnnotationHub)
+library(ensembldb)
+library(gridExtra)
+library(NOISeq)
+library(ggpointdensity)
+
+# Define core functions
+
+# Define file path to your count file
+count_file <- "C:/Users/Bruger/Desktop/Amplexa Genetics/Computational/Sv_ Re_/RNAseq_files/RNAseq_files/SDU-186_RNAseq_counts_symbolconverted.txt"
+
+# Read count data into df
+df <- read.table(count_file, header = TRUE, sep = "\t", row.names = 1)
+
+# Check the first few rows of df to confirm it loaded correctly
+head(df)
+
+
+read_and_filter_data <- function(count_file, meta_file) {
+  data <- read.table(count_file, header = TRUE, sep = "\t", row.names = 1)
+  df <- subset(data, select = -c(Chr, Start, End, Strand, Length))
+  
+  meta_data <- read.table(meta_file, header = TRUE, sep = "\t")
+  
+  # Ensure that meta_data contains the 'sample_name' column and that sample names match the count data
+  if (!"sample_name" %in% colnames(meta_data)) {
+    stop("Error: 'sample_name' column not found in metadata.")
+  }
+  
+  # Ensure the column names in df match the sample names in meta_data
+  if (all(meta_data$sample_name %in% colnames(df))) {
+    # Align meta_data with the column names in df (this step ensures matching order)
+    meta_data <- meta_data[match(colnames(df), meta_data$sample_name), ]
+  } else {
+    stop("Sample names in metadata do not match columns in count data.")
+  }
+  
+  # Check if the number of samples match between df and meta_data
+  if (ncol(df) != nrow(meta_data)) {
+    stop("Number of columns in 'df' does not match number of rows in 'meta_data'.")
+  }
+  
+  # Update column names of df to match sample names in meta_data
+  colnames(df) <- meta_data$sample_name
+  
+  return(list(df = df, meta_data = meta_data))
+}
+
+
+extract_biotypes <- function(gtf_file, df) {
+  gtf <- read.table(gtf_file, sep = "\t") %>% filter(V3 == "gene")
+  gene_biotype_df <- gtf %>%
+    mutate(
+      gene_id = str_extract(V9, "gene_id \"(.*?)\";"),
+      biotype = str_extract(V9, "gene_biotype \"(.*?)\";")
+    ) %>%
+    select(gene_id, biotype) %>%
+    distinct()
+  
+  gene_biotype_df$gene_id <- str_replace_all(gene_biotype_df$gene_id, 'gene_id |;', "")
+  gene_biotype_df$biotype <- str_replace_all(gene_biotype_df$biotype, 'gene_biotype |;', "")
+  
+  df <- df[rownames(df) %in% gene_biotype_df$gene_id, ]
+  df$biotype <- gene_biotype_df$biotype[match(rownames(df), gene_biotype_df$gene_id)]
+  
+  return(df)
+}
+
+create_dds_object <- function(df, meta_data) {
+  dds <- DESeqDataSetFromMatrix(countData = df, colData = meta_data, design = ~condition)
+  return(dds)
+}
+
+# Define main workflow
+run_qc_pipeline <- function(count_file, meta_file, gtf_file, output_dir) {
+  # Create output directory if not exists
+  dir.create(output_dir, showWarnings = FALSE, recursive = TRUE)
+  
+  # Load and preprocess data
+  cat("Loading data...\n")
+  data <- read_and_filter_data(count_file, meta_file)
+  df <- data$df
+  meta_data <- data$meta_data
+  
+  # Extract biotype information
+  cat("Extracting biotypes...\n")
+  df <- extract_biotypes(gtf_file, df)
+  
+  # Create DESeq2 object
+  cat("Creating DESeq2 object...\n")
+  dds <- create_dds_object(df, meta_data)
+  
+  # Generate QC plots
+  cat("Generating QC plots...\n")
+  
+  # 1. Duplication rate plot
+  duplication_plot <- ggplot(meta_data, aes(x = condition, y = Duplication_rate, color = condition)) +
+    geom_point(size = 3) +
+    geom_text_repel(aes(label = sample_name)) +
+    labs(title = "Duplication Rate", y = "Percent Duplication", x = "Condition") +
+    theme_minimal()
+  
+  # 2. Mapping rate plot
+  mapping_plot <- ggplot(meta_data, aes(x = condition, y = Mapping_rate, color = condition)) +
+    geom_point(size = 3) +
+    geom_text_repel(aes(label = sample_name)) +
+    labs(title = "Mapping Rate", y = "Mapping (%)", x = "Condition") +
+    theme_minimal()
+  
+  # 3. Check for low count genes plot (log2 counts)
+  low_counts_plot <- ggplot(meta_data, aes(x = condition, y = low_counts)) +
+    geom_bar(stat = "identity", position = "dodge") +
+    labs(title = "Low Count Genes", y = "Count", x = "Condition") +
+    theme_minimal()
+  
+  # 4. RLE (Relative Log Expression) plot
+  rle_plot <- plotRLE(dds, outline = TRUE)
+  
+  # 5. PCA (Principal Component Analysis) plot
+  pca_plot <- plotPCA(dds, intgroup = "condition", returnData = TRUE)
+  pca_plot <- ggplot(pca_plot, aes(PC1, PC2, color = condition)) +
+    geom_point(size = 3) +
+    labs(title = "PCA Plot", x = "PC1", y = "PC2") +
+    theme_minimal()
+  
+  # 6. Variance stabilizing transformation (vsn) plot
+  vsn_plot <- vsn::vsn2(dds)
+  vsn_plot <- plot(vsn_plot, main = "Variance Stabilizing Transformation (VST)")
+  
+  # Save all plots to a single PDF file
+  cat("Saving QC plots...\n")
+  pdf(file.path(output_dir, "qc_plots.pdf"), width = 10, height = 8)
+  
+  # Combine all the plots into one PDF file
+  gridExtra::grid.arrange(
+    duplication_plot, mapping_plot, low_counts_plot, rle_plot, pca_plot, vsn_plot, 
+    ncol = 2, nrow = 3
+  )
+  
+  dev.off()  # Close the PDF file
+  
+  cat("QC pipeline completed. Results saved to:", output_dir, "\n")
+}
+
+# Run the pipeline
+count_file <- "C:/Users/Bruger/Desktop/Amplexa Genetics/Computational/Sv_ Re_/RNAseq_files/RNAseq_files/SDU-186_RNAseq_counts_symbolconverted.txt"
+meta_file <- "C:/Users/Bruger/Desktop/Amplexa Genetics/Computational/Sv_ Re_/RNAseq_files/RNAseq_files/SDU-186_metadata.txt"
+gtf_file <- "C:/Users/Bruger/Desktop/Amplexa Genetics/Computational/Sv_ Re_/RNAseq_files/RNAseq_files/supplementary_reference/genomic.gtf"
+output_dir <- "RNAseq_QC_Output"
+
+run_qc_pipeline(count_file, meta_file, gtf_file, output_dir)
