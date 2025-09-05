@@ -1,0 +1,94 @@
+install.packages("BiocManager")
+#BiocManager::install("clusterProfiler")
+library(clusterProfiler)
+#BiocManager::install("org.Hs.eg.db") not needed (human data)
+library(GO.db)
+
+GOterm_lookup<- as.data.frame(GOTERM)
+GOterm_lookup$go_id<- NULL
+
+#merging two data frames into one( X= first data.set, Y= second data.set.)
+GOterm_merged<-merge(GOterm_merged, GOterm_lookup, by.x = "ID", by.y ="go_id" )
+
+#loading data and genelist fro QS lmo02024.
+
+geneList <- strsplit(kegg_result@result[5, 13], split = "/")[[1]]
+geneList <-unlist(geneList)
+geneList<- data.frame(geneList)
+write.csv(geneList, "geneList.csv", row.names = FALSE)
+
+#geneList = read.table(geneList, header = T)
+#geneList <- geneList[, c(1)] 
+
+
+
+
+TERM2GENE <- ("68.L_monocytogenes_EGD-e.goa.txt")
+
+TERM2GENE = read.table("68.L_monocytogenes_EGD-e.goa.txt", sep = "\t", fill = T)
+
+TERM2NAME <- TERM2GENE[, c(5, 3)]
+colnames(TERM2NAME) <- c("TERM", "NAME")
+
+
+#implementing enrichGO() for gene ontology over representation test.
+GO = enricher(
+  geneList,
+  pvalueCutoff = 1.00,
+  pAdjustMethod = "none",
+  TERM2GENE = TERM2NAME
+)
+#loading plot libraries.
+library(ggplot2)
+library(dplyr)
+library(forcats)
+
+#removed duplicates and renamed the data.frame. 
+GOterm_merged<-GOterm_merged[!duplicated(GOterm_merged$ID),]
+
+GOterm_merged$Term = factor(GOterm_merged$Term, levels = GOterm_merged$Term[order(GOterm_merged$FoldEnrichment)])
+GOterm_merged = GOterm_merged %>% arrange(desc(FoldEnrichment))
+
+
+
+# Change the width of bars and create plot.
+ggplot(data=GOterm_merged[1:20,], aes(x=FoldEnrichment, y=Term)) +
+  geom_bar(stat="identity", width=0.5) 
+
+
+# make a table and extract the first 20 genes.
+GOterm_subset <- GOterm_merged[1:20, ]
+
+ggplot(data=GOterm_subset[1:20,], aes(x=FoldEnrichment, y=Term)) +
+  geom_bar(stat="identity", width=0.5)
+# Save as CSV
+write.csv(GOterm_subset, "GOterm_subset.csv", row.names = FALSE)
+
+
+#splitting the genes one by one and removing / from "geneID" column.
+GOmerged_genes <- c()
+for (x in 1:27){
+  GOmerged_genes<-c(GOmerged_genes, strsplit(GOterm_merged$geneID[x],split = "/")) 
+}
+
+GOmerged_genes <-unlist(GOmerged_genes)
+GOmerged_genes<- data.frame(GOmerged_genes)
+
+#merging Go analysis and Quorum Sensing genes for pathway analysis
+
+diff_expr <- read.table("Quorum Sensing/geneList.csv")[[1]]
+#creating a vector from diff_expr of gene column 
+diff_exprmerged <- diff_expr[1:33]
+diff_exprmerged<- data.frame(diff_exprmerged)
+
+#overlaping common genes.
+overlapping_genes <- intersect(GOmerged_genes[[1]], diff_exprmerged[[1]])
+overlapping_genes_df <- data.frame(Gene = overlapping_genes)
+
+print(overlapping_genes)
+
+#save in a file 
+
+write.csv(overlapping_genes, "overlapping_genes.csv", row.names = FALSE)
+
+
