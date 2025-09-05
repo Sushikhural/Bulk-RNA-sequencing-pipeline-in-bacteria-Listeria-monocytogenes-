@@ -1,0 +1,157 @@
+library(DESeq2)
+library(dplyr)
+library(ggplot2)
+library(ggrepel)
+library(patchwork)
+
+#set working directory of "vs "Combination before run.
+
+
+# read in data and sample ID
+data <- read.table('set_count_matrix__RNAseq_counts_fq_split.txt', header = T, row.names = 1, sep ='\t') %>%
+  dplyr::select(6:ncol(.)) %>% # Removes the 6 first columns containing gene metadata
+  as.matrix()
+data[is.na(data)] <- 0
+
+# Read in meta data
+coldata <- read.table('_metadata_Split.txt', sep = '\t', row.names = 1, header = T)
+  #coldata$condition <- gsub('R[0-9]|Fixed', '', row.names(coldata))
+coldata <- coldata %>% mutate(condition = as.factor(condition))
+
+## DEG ----
+# Check that countdata and metadata matches  
+data <- data[,rownames(coldata)]
+
+all(rownames(coldata) == colnames(data))
+
+dds <- DESeqDataSetFromMatrix(countData = data,
+                              colData = coldata,
+                              design = ~condition)
+
+# Variance stabilization transformation
+dds_norm <- vst(dds, nsub = 100)
+
+pdf('PCA.pdf', width = 9, height = 11)
+plotPCA(dds_norm, ntop = 1000)  + geom_text_repel(aes(label = name), box.padding = 0.35) + theme_bw()
+dev.off()
+
+
+# make object ready for differential expression analysis
+dds <- DESeq(dds)
+featureData <- data.frame(gene=rownames(data))
+mcols(dds) <- DataFrame(mcols(dds), featureData)
+keep <- rowSums(counts(dds)) >= 10
+dds <- dds[keep,]
+
+#counts(dds, normalized=TRUE)[geneList$geneList,]
+
+
+
+# Make comparisons
+combinations <- read.table('comparison_combinations.txt', header = T) # possible combinatoins made in excel
+
+res_list <- vector("list", nrow(combinations))
+
+  # Define your two sample names manually
+  sample1 <- "EDepFixedR3"  # Replace with actual sample name
+  sample2 <- "SDepFixedR3"  # Replace with actual sample name
+  
+  # Run DESeq2 comparison for these two samples
+  res <- results(dds, contrast = c("condition", sample1, sample2), independentFiltering = FALSE)
+  
+  # Apply shrinkage for more reliable log2FoldChange
+  res <- lfcShrink(dds, contrast = c("condition", sample1, sample2), type = "normal", res = res)
+  
+  
+  # 1. Run DESeq2 comparison and process results (Only for EDepFixedR3 vs EDepR2)
+  if (sample1 == "EDepFixedR3" & sample2 == "SDepFixedR3") {
+    
+    resdf <- as.data.frame(res) %>%
+      tibble::rownames_to_column("gene_id") %>%
+      arrange(pvalue) %>%
+      mutate(
+        diffexpressed = case_when(
+          log2FoldChange > 0.1 & pvalue < 0.05 ~ "UP",
+          log2FoldChange < -0.1 & pvalue < 0.05 ~ "DOWN",
+          TRUE ~ "NO"
+        ),
+        delabel = ifelse(diffexpressed != 'NO', gene_id, NA),
+        FoldChange = sign(log2FoldChange) * 2^abs(log2FoldChange)
+      ) %>%
+      tibble::column_to_rownames("gene_id")
+    
+    # Store results
+    res_list[[1]] <- resdf
+    names(res_list)[1] <- paste0(sample1, ' vs ', sample2)
+    
+    # Create directory for differentially expressed genes
+    dir.create('differentially_expressed', showWarnings = FALSE)
+    
+    # Export results
+    export_df <- resdf %>%
+      dplyr::select(log2FoldChange, FoldChange, pvalue) %>%
+      tibble::rownames_to_column("Gene")
+    
+    write.table(export_df, file = paste0('differentially_expressed/', names(res_list[1]), '.txt'),
+                quote = FALSE, sep = '\t', row.names = FALSE)
+       
+    
+    
+    # Create directory for volcano plots
+    dir.create('volcano_plots', showWarnings = FALSE)
+    
+    # Generate volcano plot
+    filename <- paste0('volcano_plots/', names(res_list[1]), '_volcano.png')
+    
+    png(filename, width = 10, height = 9, units = 'in', res = 1200)
+    print(
+      ggplot(data = res_list[[1]], aes(x = log2FoldChange, y = -log10(pvalue), col = diffexpressed, label = delabel)) +
+        geom_point() +
+        theme_minimal() +
+        ggtitle(names(res_list[1])) +
+        cowplot::theme_cowplot() +
+        geom_text_repel()
+    )
+    dev.off()
+    
+    # 2. PCA Plot for the Two Selected Samples
+    selected_samples <- c(sample1, sample2)
+    dds_subset <- dds[, colnames(dds) %in% selected_samples]  # Subset DESeq2 object
+    
+    # Variance Stabilizing Transformation (VST)
+    dds_subset_vst <- vst(dds_subset, nsub = 100)
+    
+    # PCA Plot
+    pca_filename <- paste0("PCA_", sample1, "_vs_", sample2, ".pdf")
+    pdf(pca_filename, width = 9, height = 11)
+    plotPCA(dds_subset_vst, ntop = 1000) + 
+      geom_text_repel(aes(label = name), box.padding = 0.35) + 
+      theme_bw()
+    dev.off()
+    
+    message("PCA plot saved as: ", pca_filename)
+  }
+  
+  
+  
+  #Identifying the highly expressed genes by fold change.
+  df <- read.table("C:/Users/Sushmeet/Documents/Amplexa Genetics/DESeq2 Split samples/EDepFixedR3vsSDepFixedR3/differentially_expressed/EDepFixedR3 vs SDepFixedR3.txt", 
+                   header = TRUE, sep = "\t", stringsAsFactors = FALSE)
+  
+  
+  #sorting the data + add (desc()) to arrange from largest to smallest number otherwise asce is set as default.
+  colnames(df)
+  df_sorted <- df %>% arrange((FoldChange))
+  
+  head(df_sorted)
+  #check df_sorted for the highly expressed genes.
+  
+  
+  #first 40 rows from the sorted data
+  df_top40 <- head(df_sorted, 40)
+  df_top40 <- data.frame(df_top40)
+  
+  # Save to a new file and change the combination name before runnning.
+  write.table(df_top40, "~/Amplexa Genetics/DESeq2 Split samples/EDepFixedR3vsSDepFixedR3/top40_genes.txt", 
+              sep = "\t", row.names = FALSE, quote = FALSE)
+  
