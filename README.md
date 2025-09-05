@@ -1,1 +1,1 @@
-# Bulk-RNA-sequencing-pipeline-in-bacteria-Listeria-monocytogenes-
+# Bulk-RNA-sequencing-pipeline-in-R-bacteria-Listeria-monocytogenes-
