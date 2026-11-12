@@ -13,7 +13,7 @@ library(ggpointdensity)
 # Define core functions
 
 # Define file path to your count file
-count_file <- "C:/Users/Bruger/Desktop/Amplexa Genetics/Computational/Sv_ Re_/RNAseq_files/RNAseq_files/SDU-186_RNAseq_counts_symbolconverted.txt"
+count_file <- "add file path"
 
 # Read count data into df
 df <- read.table(count_file, header = TRUE, sep = "\t", row.names = 1)
